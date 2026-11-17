@@ -1,0 +1,521 @@
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { seedDemo } from "../data/seed";
+import { createRepository, type Repository } from "../data/repository";
+import { isTauri } from "../lib/env";
+import { descendantFolderIds, rootFolder } from "../lib/tree";
+import { createId, emptySnapshot, type Attachment, type Block, type Snapshot, type Tab, type Todo } from "../types";
+
+interface Focus {
+  experimentId: string;
+  blockId?: string;
+}
+
+interface UpdateOffer {
+  version: string;
+  install: () => Promise<void>;
+}
+
+interface AppApi {
+  ready: boolean;
+  snap: Snapshot;
+  now: Date;
+  saveState: "saved" | "saving";
+  tabs: Tab[];
+  activeTab: Tab;
+  expanded: Record<string, boolean>;
+  sidebarQuery: string;
+  focus: Focus | null;
+  toast: string | null;
+  updateOffer: UpdateOffer | null;
+  setSidebarQuery: (query: string) => void;
+  toggleExpanded: (id: string) => void;
+  setActiveTab: (id: string) => void;
+  closeTab: (id: string) => void;
+  newTab: () => void;
+  openFolder: (id: string) => void;
+  openExperiment: (id: string, opts?: { blockId?: string }) => void;
+  openTodo: () => void;
+  openRecent: () => void;
+  showFiles: () => void;
+  createFolder: (parentId: string | null, name?: string) => void;
+  createExperiment: (folderId: string) => void;
+  renameFolder: (id: string, name: string) => void;
+  renameExperiment: (id: string, title: string) => void;
+  setSubtitle: (id: string, subtitle: string) => void;
+  moveExperiment: (id: string, folderId: string) => void;
+  moveFolder: (id: string, parentId: string | null) => void;
+  deleteFolder: (id: string) => void;
+  deleteExperiment: (id: string) => void;
+  addBlock: (experimentId: string, kind: Block["kind"], plain?: string) => string;
+  updateBlock: (id: string, recipe: (block: Block) => void) => void;
+  deleteBlock: (id: string) => void;
+  moveBlock: (id: string, direction: -1 | 1) => void;
+  saveTodo: (todo: Todo) => void;
+  toggleTodo: (id: string) => void;
+  deleteTodo: (id: string) => void;
+  ignoreSuggestion: (experimentId: string, blockId: string, fingerprint: string) => void;
+  addAttachment: (attachment: Attachment, bytes: Uint8Array) => Promise<void>;
+  deleteAttachment: (id: string) => Promise<void>;
+  readAttachment: (id: string) => Promise<Uint8Array>;
+  exportAttachment: (id: string) => Promise<void>;
+  setDemoClock: (enabled: boolean) => void;
+  checkUpdates: () => Promise<void>;
+  clearToast: () => void;
+  clearFocus: () => void;
+}
+
+const Ctx = createContext<AppApi | null>(null);
+
+function boot(snap: Snapshot): { tabs: Tab[]; active: string; expanded: Record<string, boolean> } {
+  const nofq = snap.folders.find((folder) => folder.name === "NOFQ");
+  const first = snap.experiments.find((experiment) => experiment.title === "eMJ001");
+  const root = rootFolder(snap.folders);
+  const tabs: Tab[] = [];
+  if (nofq) tabs.push({ id: "tab-nofq", kind: "folder", targetId: nofq.id });
+  else if (root) tabs.push({ id: "tab-root", kind: "folder", targetId: root.id });
+  if (first) tabs.push({ id: "tab-e1", kind: "experiment", targetId: first.id });
+  if (!tabs.length) tabs.push({ id: "tab-empty", kind: "todo" });
+  const expanded: Record<string, boolean> = {};
+  if (root) expanded[root.id] = true;
+  if (nofq) expanded[nofq.id] = true;
+  return { tabs, active: tabs[0].id, expanded };
+}
+
+async function notify(body: string): Promise<void> {
+  if (isTauri()) {
+    const { isPermissionGranted, requestPermission, sendNotification } = await import("@tauri-apps/plugin-notification");
+    let granted = await isPermissionGranted();
+    if (!granted) granted = (await requestPermission()) === "granted";
+    if (granted) sendNotification({ title: "LabTrace 待办", body });
+    return;
+  }
+  if (typeof Notification === "undefined") return;
+  if (Notification.permission === "default") await Notification.requestPermission();
+  if (Notification.permission === "granted") new Notification("LabTrace 待办", { body });
+}
+
+export function AppProvider({ children }: { children: ReactNode }) {
+  const repoRef = useRef<Repository | null>(null);
+  const snapRef = useRef<Snapshot>(emptySnapshot());
+  const timer = useRef<number>(0);
+  const [snap, setSnap] = useState<Snapshot>(emptySnapshot());
+  const [ready, setReady] = useState(false);
+  const [saveState, setSaveState] = useState<"saved" | "saving">("saved");
+  const [tabs, setTabs] = useState<Tab[]>([]);
+  const [activeTabId, setActiveTabId] = useState("");
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [sidebarQuery, setSidebarQuery] = useState("");
+  const [focus, setFocus] = useState<Focus | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [updateOffer, setUpdateOffer] = useState<UpdateOffer | null>(null);
+
+  const commit = (recipe: (draft: Snapshot) => void, immediate = false) => {
+    const next = structuredClone(snapRef.current);
+    recipe(next);
+    snapRef.current = next;
+    setSnap(next);
+    setSaveState("saving");
+    window.clearTimeout(timer.current);
+    const persist = () => {
+      void repoRef.current?.save(snapRef.current).then(
+        () => setSaveState("saved"),
+        () => {
+          setSaveState("saved");
+          setToast("保存失败");
+        },
+      );
+    };
+    if (immediate) persist();
+    else timer.current = window.setTimeout(persist, 420);
+  };
+
+  useEffect(() => {
+    let cancel = false;
+    void (async () => {
+      const repo = await createRepository();
+      repoRef.current = repo;
+      let loaded = await repo.load();
+      if (loaded.folders.length === 0) loaded = await seedDemo(repo);
+      if (cancel) return;
+      snapRef.current = loaded;
+      setSnap(loaded);
+      const started = boot(loaded);
+      setTabs(started.tabs);
+      setActiveTabId(started.active);
+      setExpanded(started.expanded);
+      setReady(true);
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const flush = () => {
+      window.clearTimeout(timer.current);
+      void repoRef.current?.save(snapRef.current);
+    };
+    window.addEventListener("beforeunload", flush);
+    return () => window.removeEventListener("beforeunload", flush);
+  }, []);
+
+  useEffect(() => {
+    const tick = window.setInterval(() => {
+      const current = snapRef.current;
+      const real = Date.now();
+      const due = current.todos.filter(
+        (todo) => !todo.completed && !todo.notified && todo.dueAt != null && todo.dueAt <= real && real - todo.dueAt < 90_000,
+      );
+      if (!due.length) return;
+      for (const todo of due) void notify(todo.content);
+      commit((draft) => {
+        for (const todo of draft.todos) {
+          if (due.some((item) => item.id === todo.id)) todo.notified = true;
+        }
+      });
+    }, 20_000);
+    return () => window.clearInterval(tick);
+  }, []);
+
+  const now = useMemo(() => (snap.demoNowMs != null ? new Date(snap.demoNowMs) : new Date()), [snap.demoNowMs]);
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0] ?? { id: "tab-empty", kind: "todo" as const };
+
+  const focusTab = (next: Tab[], id: string) => {
+    setTabs(next);
+    setActiveTabId(id);
+  };
+
+  const openUnique = (kind: Tab["kind"], targetId?: string, replaceFolder = false) => {
+    const existing = tabs.find((tab) => tab.kind === kind && tab.targetId === targetId);
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+    const id = createId();
+    if (replaceFolder && activeTab.kind === "folder") {
+      focusTab(tabs.map((tab) => (tab.id === activeTab.id ? { ...tab, kind, targetId } : tab)), activeTab.id);
+      return;
+    }
+    focusTab([...tabs, { id, kind, targetId }], id);
+  };
+
+  const api: AppApi = {
+    ready,
+    snap,
+    now,
+    saveState,
+    tabs,
+    activeTab,
+    expanded,
+    sidebarQuery,
+    focus,
+    toast,
+    updateOffer,
+    setSidebarQuery,
+    toggleExpanded: (id) => setExpanded((prev) => ({ ...prev, [id]: !prev[id] })),
+    setActiveTab: setActiveTabId,
+    closeTab: (id) => {
+      const next = tabs.filter((tab) => tab.id !== id);
+      const fallback = next.length ? next : [{ id: createId(), kind: "folder" as const, targetId: rootFolder(snap.folders)?.id }];
+      setTabs(fallback);
+      if (activeTabId === id) setActiveTabId(fallback[Math.max(0, tabs.findIndex((tab) => tab.id === id) - 1)]?.id ?? fallback[0].id);
+    },
+    newTab: () => {
+      const id = createId();
+      const targetId = rootFolder(snap.folders)?.id;
+      focusTab([...tabs, { id, kind: "folder", targetId }], id);
+    },
+    openFolder: (id) => openUnique("folder", id, true),
+    openExperiment: (id, opts) => {
+      commit((draft) => {
+        const opened = draft.demoNowMs ?? Date.now();
+        const recent = draft.recents.find((item) => item.experimentId === id);
+        if (recent) recent.openedAt = opened;
+        else draft.recents.push({ experimentId: id, openedAt: opened });
+      });
+      openUnique("experiment", id);
+      setFocus(opts?.blockId ? { experimentId: id, blockId: opts.blockId } : { experimentId: id });
+    },
+    openTodo: () => openUnique("todo"),
+    openRecent: () => openUnique("recent"),
+    showFiles: () => {
+      const fileTab = [...tabs].reverse().find((tab) => tab.kind === "folder" || tab.kind === "experiment");
+      if (fileTab) setActiveTabId(fileTab.id);
+      else api.newTab();
+    },
+    createFolder: (parentId, name = "未命名文件夹") => {
+      commit((draft) => {
+        const order = draft.folders.filter((folder) => folder.parentId === parentId).reduce((max, folder) => Math.max(max, folder.order), -1) + 1;
+        const ts = Date.now();
+        draft.folders.push({ id: createId(), parentId, name, order, createdAt: ts, updatedAt: ts });
+      }, true);
+      if (parentId) setExpanded((prev) => ({ ...prev, [parentId]: true }));
+    },
+    createExperiment: (folderId) => {
+      const id = createId();
+      commit((draft) => {
+        const order = draft.experiments.filter((experiment) => experiment.folderId === folderId).reduce((max, experiment) => Math.max(max, experiment.order), -1) + 1;
+        const ts = Date.now();
+        draft.experiments.push({ id, folderId, title: "未命名实验", subtitle: "", order, createdAt: ts, updatedAt: ts });
+      }, true);
+      setExpanded((prev) => ({ ...prev, [folderId]: true }));
+      openUnique("experiment", id);
+    },
+    renameFolder: (id, name) => commit((draft) => {
+      const folder = draft.folders.find((item) => item.id === id);
+      if (folder) {
+        folder.name = name.trim() || folder.name;
+        folder.updatedAt = Date.now();
+      }
+    }),
+    renameExperiment: (id, title) => commit((draft) => {
+      const experiment = draft.experiments.find((item) => item.id === id);
+      if (experiment) {
+        experiment.title = title;
+        experiment.updatedAt = Date.now();
+      }
+    }),
+    setSubtitle: (id, subtitle) => commit((draft) => {
+      const experiment = draft.experiments.find((item) => item.id === id);
+      if (experiment) {
+        experiment.subtitle = subtitle;
+        experiment.updatedAt = Date.now();
+      }
+    }),
+    moveExperiment: (id, folderId) => commit((draft) => {
+      const experiment = draft.experiments.find((item) => item.id === id);
+      if (experiment) {
+        experiment.folderId = folderId;
+        experiment.updatedAt = Date.now();
+      }
+    }, true),
+    moveFolder: (id, parentId) => {
+      if (parentId === id) return;
+      const banned = new Set([id, ...descendantFolderIds(snap.folders, id)]);
+      if (parentId && banned.has(parentId)) return;
+      commit((draft) => {
+        const folder = draft.folders.find((item) => item.id === id);
+        if (folder) {
+          folder.parentId = parentId;
+          folder.updatedAt = Date.now();
+        }
+      }, true);
+    },
+    deleteFolder: (id) => {
+      const ids = new Set([id, ...descendantFolderIds(snap.folders, id)]);
+      const experimentIds = new Set(snap.experiments.filter((experiment) => ids.has(experiment.folderId)).map((experiment) => experiment.id));
+      const names = snap.attachments.filter((item) => experimentIds.has(item.experimentId)).map((item) => item.storedName);
+      commit((draft) => {
+        removeExperiments(draft, experimentIds);
+        draft.folders = draft.folders.filter((folder) => !ids.has(folder.id));
+      }, true);
+      for (const name of names) void repoRef.current?.removeBytes(name);
+      setTabs((prev) => {
+        const next = prev.filter((tab) => !(tab.kind === "folder" && tab.targetId && ids.has(tab.targetId)) && !(tab.kind === "experiment" && tab.targetId && experimentIds.has(tab.targetId)));
+        const fallback = next.length ? next : [{ id: createId(), kind: "folder" as const, targetId: rootFolder(snap.folders.filter((folder) => !ids.has(folder.id)))?.id }];
+        if (!fallback.some((tab) => tab.id === activeTabId)) setActiveTabId(fallback[0].id);
+        return fallback;
+      });
+    },
+    deleteExperiment: (id) => {
+      const names = snap.attachments.filter((item) => item.experimentId === id).map((item) => item.storedName);
+      commit((draft) => removeExperiments(draft, new Set([id])), true);
+      for (const name of names) void repoRef.current?.removeBytes(name);
+      setTabs((prev) => {
+        const next = prev.filter((tab) => !(tab.kind === "experiment" && tab.targetId === id));
+        const fallback = next.length ? next : [{ id: createId(), kind: "folder" as const, targetId: rootFolder(snap.folders)?.id }];
+        if (!fallback.some((tab) => tab.id === activeTabId)) setActiveTabId(fallback[0].id);
+        return fallback;
+      });
+    },
+    addBlock: (experimentId, kind, plain) => {
+      const id = createId();
+      commit((draft) => {
+        const siblings = draft.blocks.filter((block) => block.experimentId === experimentId);
+        const order = siblings.reduce((max, block) => Math.max(max, block.order), -1) + 1;
+        const ts = Date.now();
+        if (kind === "plate") {
+          const count = siblings.filter((block) => block.kind === "plate").length + 1;
+          draft.blocks.push({
+            id, experimentId, kind, order, updatedAt: ts,
+            plate: {
+              title: `Plate ${count}`,
+              rows: 4,
+              cols: 6,
+              groups: [
+                { id: "ctrl", name: "Ctrl", color: "#E4E0FC" },
+                { id: "glu", name: "Glu", color: "#B6F2EB" },
+                { id: "es", name: "ES", color: "#C3BAFB" },
+                { id: "esglu", name: "ES+Glu", color: "#FEF1AA" },
+              ],
+              wells: {},
+              lidNotes: "",
+            },
+          });
+        } else if (kind === "text") {
+          const safe = (plain ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
+          draft.blocks.push({
+            id, experimentId, kind, order, updatedAt: ts,
+            text: { html: plain ? `<p>${safe}</p>` : "<p></p>", plain: plain ?? "" },
+          });
+        } else {
+          draft.blocks.push({ id, experimentId, kind, order, updatedAt: ts });
+        }
+        const experiment = draft.experiments.find((item) => item.id === experimentId);
+        if (experiment) experiment.updatedAt = ts;
+      });
+      return id;
+    },
+    updateBlock: (id, recipe) => commit((draft) => {
+      const block = draft.blocks.find((item) => item.id === id);
+      if (!block) return;
+      recipe(block);
+      block.updatedAt = Date.now();
+      const experiment = draft.experiments.find((item) => item.id === block.experimentId);
+      if (experiment) experiment.updatedAt = block.updatedAt;
+    }),
+    deleteBlock: (id) => commit((draft) => {
+      const block = draft.blocks.find((item) => item.id === id);
+      draft.blocks = draft.blocks.filter((item) => item.id !== id);
+      if (block?.kind === "files") {
+        const removed = draft.attachments.filter((item) => item.blockId === id);
+        draft.attachments = draft.attachments.filter((item) => item.blockId !== id);
+        for (const attachment of removed) void repoRef.current?.removeBytes(attachment.storedName);
+      }
+    }, true),
+    moveBlock: (id, direction) => commit((draft) => {
+      const block = draft.blocks.find((item) => item.id === id);
+      if (!block) return;
+      const siblings = draft.blocks.filter((item) => item.experimentId === block.experimentId).sort((a, b) => a.order - b.order);
+      const index = siblings.findIndex((item) => item.id === id);
+      const swap = siblings[index + direction];
+      if (!swap) return;
+      const order = block.order;
+      block.order = swap.order;
+      swap.order = order;
+    }),
+    saveTodo: (todo) => {
+      commit((draft) => {
+        const index = draft.todos.findIndex((item) => item.id === todo.id);
+        if (index >= 0) draft.todos[index] = todo;
+        else draft.todos.push(todo);
+      });
+      if (!todo.completed && todo.dueAt) void notifyReady();
+    },
+    toggleTodo: (id) => commit((draft) => {
+      const todo = draft.todos.find((item) => item.id === id);
+      if (!todo) return;
+      todo.completed = !todo.completed;
+      todo.completedAt = todo.completed ? Date.now() : null;
+      todo.updatedAt = Date.now();
+    }),
+    deleteTodo: (id) => commit((draft) => {
+      draft.todos = draft.todos.filter((todo) => todo.id !== id);
+    }, true),
+    ignoreSuggestion: (experimentId, blockId, fingerprint) => commit((draft) => {
+      if (!draft.ignored.some((item) => item.experimentId === experimentId && item.blockId === blockId && item.fingerprint === fingerprint)) {
+        draft.ignored.push({ experimentId, blockId, fingerprint });
+      }
+    }, true),
+    addAttachment: async (attachment, bytes) => {
+      await repoRef.current?.writeBytes(attachment.storedName, bytes);
+      commit((draft) => {
+        draft.attachments.push(attachment);
+        const experiment = draft.experiments.find((item) => item.id === attachment.experimentId);
+        if (experiment) experiment.updatedAt = attachment.updatedAt;
+      }, true);
+    },
+    deleteAttachment: async (id) => {
+      const attachment = snapRef.current.attachments.find((item) => item.id === id);
+      if (attachment) await repoRef.current?.removeBytes(attachment.storedName);
+      commit((draft) => {
+        draft.attachments = draft.attachments.filter((item) => item.id !== id);
+      }, true);
+    },
+    readAttachment: async (id) => {
+      const attachment = snapRef.current.attachments.find((item) => item.id === id);
+      if (!attachment) return new Uint8Array();
+      return (await repoRef.current?.readBytes(attachment.storedName)) ?? new Uint8Array();
+    },
+    exportAttachment: async (id) => {
+      const attachment = snapRef.current.attachments.find((item) => item.id === id);
+      if (!attachment || !repoRef.current) return;
+      if (isTauri()) {
+        const { save } = await import("@tauri-apps/plugin-dialog");
+        const { invoke } = await import("@tauri-apps/api/core");
+        const dest = await save({ title: "保存文件", defaultPath: attachment.filename });
+        if (!dest) return;
+        await invoke("export_attachment", { storedName: attachment.storedName, dest });
+        return;
+      }
+      const bytes = await repoRef.current.readBytes(attachment.storedName);
+      const url = URL.createObjectURL(new Blob([bytes as unknown as BlobPart]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = attachment.filename;
+      link.click();
+      URL.revokeObjectURL(url);
+    },
+    setDemoClock: (enabled) => commit((draft) => {
+      draft.demoNowMs = enabled ? new Date(2026, 8, 8, 11, 30, 0).getTime() : null;
+    }, true),
+    checkUpdates: async () => {
+      if (!isTauri()) {
+        setToast("浏览器预览不会连接更新服务器。安装桌面版后可在此检查 GitHub Releases。");
+        return;
+      }
+      try {
+        const { check } = await import("@tauri-apps/plugin-updater");
+        const update = await check();
+        if (!update) {
+          setUpdateOffer(null);
+          setToast("已是最新版本");
+          return;
+        }
+        setUpdateOffer({
+          version: update.version,
+          install: async () => {
+            setToast(`正在下载 ${update.version}…`);
+            await update.downloadAndInstall();
+            const { relaunch } = await import("@tauri-apps/plugin-process");
+            await relaunch();
+          },
+        });
+        setToast(`发现新版本 ${update.version}`);
+      } catch {
+        setToast("检查更新失败");
+      }
+    },
+    clearToast: () => setToast(null),
+    clearFocus: () => setFocus(null),
+  };
+
+  return <Ctx.Provider value={api}>{children}</Ctx.Provider>;
+}
+
+function removeExperiments(draft: Snapshot, ids: Set<string>) {
+  const blockIds = new Set(draft.blocks.filter((block) => ids.has(block.experimentId)).map((block) => block.id));
+  draft.experiments = draft.experiments.filter((experiment) => !ids.has(experiment.id));
+  draft.blocks = draft.blocks.filter((block) => !ids.has(block.experimentId));
+  draft.attachments = draft.attachments.filter((item) => !ids.has(item.experimentId));
+  draft.recents = draft.recents.filter((item) => !ids.has(item.experimentId));
+  draft.ignored = draft.ignored.filter((item) => !ids.has(item.experimentId));
+  for (const todo of draft.todos) {
+    if ((todo.experimentId && ids.has(todo.experimentId)) || (todo.sourceBlockId && blockIds.has(todo.sourceBlockId))) {
+      todo.experimentId = null;
+      todo.sourceBlockId = null;
+    }
+  }
+}
+
+async function notifyReady(): Promise<void> {
+  if (!isTauri()) return;
+  const { isPermissionGranted, requestPermission } = await import("@tauri-apps/plugin-notification");
+  if (!(await isPermissionGranted())) await requestPermission();
+}
+
+export function useApp(): AppApi {
+  const value = useContext(Ctx);
+  if (!value) throw new Error("useApp outside provider");
+  return value;
+}

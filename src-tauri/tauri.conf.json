@@ -1,0 +1,58 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "LabTrace",
+  "version": "0.1.0",
+  "identifier": "com.jimchein.labtrace",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "LabTrace",
+        "width": 1440,
+        "height": 860,
+        "minWidth": 1024,
+        "minHeight": 640,
+        "resizable": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: blob: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' https://github.com https://objects.githubusercontent.com https://release-assets.githubusercontent.com"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg", "msi", "nsis"],
+    "createUpdaterArtifacts": true,
+    "publisher": "LabTrace contributors",
+    "shortDescription": "实验记录与待办",
+    "longDescription": "LabTrace 是一款用于管理实验记录、孔板和时间安排的桌面应用。",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERFQTlBRkVGRDY5RTQ0QTMKUldTalJKN1c3NitwM2tIKzQ0anR5aUtCdzhFUVQyc2wxTE5vMlpCY2tzZnlNMVdsbFlsa2UwYzcK",
+      "endpoints": [
+        "https://github.com/Jim-Chein/LabTrace/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}
