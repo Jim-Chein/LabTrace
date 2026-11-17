@@ -46,7 +46,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERFQTlBRkVGRDY5RTQ0QTMKUldTalJKN1c3NitwM2tIKzQ0anR5aUtCdzhFUVQyc2wxTE5vMlpCY2tzZnlNMVdsbFlsa2UwYzcK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEwNzk3OUVDNDUyQ0Y0MDYKUldRRzlDeEY3SGw1b0dKWjlmcFNhOFR4R2RFOEFwK3JINS83dm0xUno1OENIcjBvWnljeDV2dHYK",
       "endpoints": [
         "https://github.com/Jim-Chein/LabTrace/releases/latest/download/latest.json"
       ],
