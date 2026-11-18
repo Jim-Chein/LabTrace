@@ -77,57 +77,25 @@ export interface Attachment {
   updatedAt: number;
 }
 
-/** record: gray "eMJ002 · 来自实验记录". link: purple "eMJ001 > Plate1". */
-export type SourceStyle = "record" | "link";
-
-export interface Todo {
-  id: string;
-  content: string;
-  dueAt: number | null;
-  completed: boolean;
-  completedAt: number | null;
-  experimentId: string | null;
-  sourceLabel: string;
-  sourceBlockId: string | null;
-  sourceStyle: SourceStyle;
-  tag: string | null;
-  notified: boolean;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface IgnoredSuggestion {
-  experimentId: string;
-  blockId: string;
-  fingerprint: string;
-}
-
 export interface Recent {
   experimentId: string;
   openedAt: number;
 }
 
 export interface Snapshot {
-  /** Sample notebook clock. Null means the real system clock. */
-  demoNowMs: number | null;
   folders: Folder[];
   experiments: Experiment[];
   blocks: Block[];
   attachments: Attachment[];
-  todos: Todo[];
-  ignored: IgnoredSuggestion[];
   recents: Recent[];
 }
 
 export function emptySnapshot(): Snapshot {
   return {
-    demoNowMs: null,
     folders: [],
     experiments: [],
     blocks: [],
     attachments: [],
-    todos: [],
-    ignored: [],
     recents: [],
   };
 }
@@ -136,7 +104,7 @@ export function createId(): string {
   return crypto.randomUUID();
 }
 
-export type TabKind = "folder" | "experiment" | "todo" | "recent";
+export type TabKind = "folder" | "experiment" | "recent";
 
 export interface Tab {
   id: string;

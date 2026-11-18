@@ -2,8 +2,6 @@ import { mb } from "../lib/format";
 import { type Repository } from "./repository";
 import type { Snapshot } from "../types";
 
-export const DEMO_NOW = new Date(2026, 8, 8, 11, 30, 0);
-
 export const DEMO_LID_NOTES = `HEK293T
 9/7 14:00 铺板
 mGluR2 + CRE-Nluc
@@ -27,10 +25,6 @@ const IDS = {
   aPzfx: "att-emj001-pzfx",
   aOpju: "att-emj001-opju",
   aGrad: "att-emj002-xlsx",
-  t1: "todo-prep",
-  t2: "todo-observe",
-  t3: "todo-glu",
-  t4: "todo-nluc",
 };
 
 function at(month: number, day: number, hour: number, minute: number): number {
@@ -44,7 +38,6 @@ function placeholder(label: string): Uint8Array {
 export function buildDemoSnapshot(): Snapshot {
   const created = at(9, 6, 9, 0);
   return {
-    demoNowMs: DEMO_NOW.getTime(),
     folders: [
       { id: IDS.root, parentId: null, name: "我的文件夹", order: 0, createdAt: created, updatedAt: created },
       { id: IDS.nofq, parentId: IDS.root, name: "NOFQ", order: 0, createdAt: created, updatedAt: at(9, 8, 11, 24) },
@@ -166,69 +159,6 @@ export function buildDemoSnapshot(): Snapshot {
         updatedAt: at(9, 8, 9, 10),
       },
     ],
-    todos: [
-      {
-        id: IDS.t1,
-        content: "准备转染试剂",
-        dueAt: at(9, 8, 15, 0),
-        completed: false,
-        completedAt: null,
-        experimentId: IDS.e2,
-        sourceLabel: "实验记录",
-        sourceBlockId: IDS.text2,
-        sourceStyle: "record",
-        tag: null,
-        notified: false,
-        createdAt: at(9, 8, 9, 0),
-        updatedAt: at(9, 8, 9, 0),
-      },
-      {
-        id: IDS.t2,
-        content: "观察细胞状态",
-        dueAt: at(9, 8, 17, 0),
-        completed: false,
-        completedAt: null,
-        experimentId: IDS.e1,
-        sourceLabel: "Plate1",
-        sourceBlockId: IDS.plate,
-        sourceStyle: "record",
-        tag: null,
-        notified: false,
-        createdAt: at(9, 8, 9, 30),
-        updatedAt: at(9, 8, 9, 30),
-      },
-      {
-        id: IDS.t3,
-        content: "Glu 1 mM 加药",
-        dueAt: at(9, 9, 14, 0),
-        completed: false,
-        completedAt: null,
-        experimentId: IDS.e1,
-        sourceLabel: "Plate1",
-        sourceBlockId: IDS.plate,
-        sourceStyle: "link",
-        tag: "从记录添加",
-        notified: false,
-        createdAt: at(9, 8, 10, 0),
-        updatedAt: at(9, 8, 10, 0),
-      },
-      {
-        id: IDS.t4,
-        content: "测 NLuc",
-        dueAt: at(9, 7, 20, 0),
-        completed: true,
-        completedAt: at(9, 7, 20, 30),
-        experimentId: IDS.e1,
-        sourceLabel: "实验记录",
-        sourceBlockId: null,
-        sourceStyle: "record",
-        tag: null,
-        notified: true,
-        createdAt: at(9, 7, 18, 0),
-        updatedAt: at(9, 7, 20, 30),
-      },
-    ],
-    ignored: [],
     recents: [
       { experimentId: IDS.e1, openedAt: at(9, 8, 11, 20) },
       { experimentId: IDS.e2, openedAt: at(9, 8, 9, 12) },

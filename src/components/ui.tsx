@@ -1,6 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ClockIcon } from "./icons";
 
 export function Popover({
   open,
@@ -66,25 +65,3 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
   );
 }
 
-export function SuggestionCard({
-  when,
-  content,
-  onAdd,
-  onIgnore,
-}: {
-  when: string;
-  content: string;
-  onAdd: () => void;
-  onIgnore: () => void;
-}) {
-  return (
-    <div className="suggest">
-      <div className="suggest-title"><ClockIcon size={16} /> 发现未来时间</div>
-      <div className="suggest-actions">
-        <button className="btn-black sm" onClick={onAdd}>加入待办</button>
-        <button className="btn-text" onClick={onIgnore}>忽略</button>
-      </div>
-      <div className="suggest-sub">{when} · {content}</div>
-    </div>
-  );
-}

@@ -1,9 +1,9 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { seedDemo } from "../data/seed";
 import { createRepository, type Repository } from "../data/repository";
 import { isTauri } from "../lib/env";
 import { descendantFolderIds, rootFolder } from "../lib/tree";
-import { createId, emptySnapshot, type Attachment, type Block, type Snapshot, type Tab, type Todo } from "../types";
+import { createId, emptySnapshot, type Attachment, type Block, type Snapshot, type Tab } from "../types";
 
 interface Focus {
   experimentId: string;
@@ -34,7 +34,6 @@ interface AppApi {
   newTab: () => void;
   openFolder: (id: string) => void;
   openExperiment: (id: string, opts?: { blockId?: string }) => void;
-  openTodo: () => void;
   openRecent: () => void;
   showFiles: () => void;
   createFolder: (parentId: string | null, name?: string) => void;
@@ -50,15 +49,10 @@ interface AppApi {
   updateBlock: (id: string, recipe: (block: Block) => void) => void;
   deleteBlock: (id: string) => void;
   moveBlock: (id: string, direction: -1 | 1) => void;
-  saveTodo: (todo: Todo) => void;
-  toggleTodo: (id: string) => void;
-  deleteTodo: (id: string) => void;
-  ignoreSuggestion: (experimentId: string, blockId: string, fingerprint: string) => void;
   addAttachment: (attachment: Attachment, bytes: Uint8Array) => Promise<void>;
   deleteAttachment: (id: string) => Promise<void>;
   readAttachment: (id: string) => Promise<Uint8Array>;
   exportAttachment: (id: string) => Promise<void>;
-  setDemoClock: (enabled: boolean) => void;
   checkUpdates: () => Promise<void>;
   clearToast: () => void;
   clearFocus: () => void;
@@ -74,24 +68,11 @@ function boot(snap: Snapshot): { tabs: Tab[]; active: string; expanded: Record<s
   if (nofq) tabs.push({ id: "tab-nofq", kind: "folder", targetId: nofq.id });
   else if (root) tabs.push({ id: "tab-root", kind: "folder", targetId: root.id });
   if (first) tabs.push({ id: "tab-e1", kind: "experiment", targetId: first.id });
-  if (!tabs.length) tabs.push({ id: "tab-empty", kind: "todo" });
+  if (!tabs.length) tabs.push({ id: "tab-empty", kind: "recent" });
   const expanded: Record<string, boolean> = {};
   if (root) expanded[root.id] = true;
   if (nofq) expanded[nofq.id] = true;
   return { tabs, active: tabs[0].id, expanded };
-}
-
-async function notify(body: string): Promise<void> {
-  if (isTauri()) {
-    const { isPermissionGranted, requestPermission, sendNotification } = await import("@tauri-apps/plugin-notification");
-    let granted = await isPermissionGranted();
-    if (!granted) granted = (await requestPermission()) === "granted";
-    if (granted) sendNotification({ title: "LabTrace 待办", body });
-    return;
-  }
-  if (typeof Notification === "undefined") return;
-  if (Notification.permission === "default") await Notification.requestPermission();
-  if (Notification.permission === "granted") new Notification("LabTrace 待办", { body });
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -159,26 +140,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("beforeunload", flush);
   }, []);
 
-  useEffect(() => {
-    const tick = window.setInterval(() => {
-      const current = snapRef.current;
-      const real = Date.now();
-      const due = current.todos.filter(
-        (todo) => !todo.completed && !todo.notified && todo.dueAt != null && todo.dueAt <= real && real - todo.dueAt < 90_000,
-      );
-      if (!due.length) return;
-      for (const todo of due) void notify(todo.content);
-      commit((draft) => {
-        for (const todo of draft.todos) {
-          if (due.some((item) => item.id === todo.id)) todo.notified = true;
-        }
-      });
-    }, 20_000);
-    return () => window.clearInterval(tick);
-  }, []);
-
-  const now = useMemo(() => (snap.demoNowMs != null ? new Date(snap.demoNowMs) : new Date()), [snap.demoNowMs]);
-  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0] ?? { id: "tab-empty", kind: "todo" as const };
+  const now = new Date();
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0] ?? { id: "tab-empty", kind: "recent" as const };
 
   const focusTab = (next: Tab[], id: string) => {
     setTabs(next);
@@ -228,7 +191,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     openFolder: (id) => openUnique("folder", id, true),
     openExperiment: (id, opts) => {
       commit((draft) => {
-        const opened = draft.demoNowMs ?? Date.now();
+        const opened = Date.now();
         const recent = draft.recents.find((item) => item.experimentId === id);
         if (recent) recent.openedAt = opened;
         else draft.recents.push({ experimentId: id, openedAt: opened });
@@ -236,7 +199,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       openUnique("experiment", id);
       setFocus(opts?.blockId ? { experimentId: id, blockId: opts.blockId } : { experimentId: id });
     },
-    openTodo: () => openUnique("todo"),
     openRecent: () => openUnique("recent"),
     showFiles: () => {
       const fileTab = [...tabs].reverse().find((tab) => tab.kind === "folder" || tab.kind === "experiment");
@@ -394,29 +356,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       block.order = swap.order;
       swap.order = order;
     }),
-    saveTodo: (todo) => {
-      commit((draft) => {
-        const index = draft.todos.findIndex((item) => item.id === todo.id);
-        if (index >= 0) draft.todos[index] = todo;
-        else draft.todos.push(todo);
-      });
-      if (!todo.completed && todo.dueAt) void notifyReady();
-    },
-    toggleTodo: (id) => commit((draft) => {
-      const todo = draft.todos.find((item) => item.id === id);
-      if (!todo) return;
-      todo.completed = !todo.completed;
-      todo.completedAt = todo.completed ? Date.now() : null;
-      todo.updatedAt = Date.now();
-    }),
-    deleteTodo: (id) => commit((draft) => {
-      draft.todos = draft.todos.filter((todo) => todo.id !== id);
-    }, true),
-    ignoreSuggestion: (experimentId, blockId, fingerprint) => commit((draft) => {
-      if (!draft.ignored.some((item) => item.experimentId === experimentId && item.blockId === blockId && item.fingerprint === fingerprint)) {
-        draft.ignored.push({ experimentId, blockId, fingerprint });
-      }
-    }, true),
     addAttachment: async (attachment, bytes) => {
       await repoRef.current?.writeBytes(attachment.storedName, bytes);
       commit((draft) => {
@@ -456,9 +395,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       link.click();
       URL.revokeObjectURL(url);
     },
-    setDemoClock: (enabled) => commit((draft) => {
-      draft.demoNowMs = enabled ? new Date(2026, 8, 8, 11, 30, 0).getTime() : null;
-    }, true),
     checkUpdates: async () => {
       if (!isTauri()) {
         setToast("浏览器预览不会连接更新服务器。安装桌面版后可在此检查 GitHub Releases。");
@@ -494,24 +430,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 }
 
 function removeExperiments(draft: Snapshot, ids: Set<string>) {
-  const blockIds = new Set(draft.blocks.filter((block) => ids.has(block.experimentId)).map((block) => block.id));
   draft.experiments = draft.experiments.filter((experiment) => !ids.has(experiment.id));
   draft.blocks = draft.blocks.filter((block) => !ids.has(block.experimentId));
   draft.attachments = draft.attachments.filter((item) => !ids.has(item.experimentId));
   draft.recents = draft.recents.filter((item) => !ids.has(item.experimentId));
-  draft.ignored = draft.ignored.filter((item) => !ids.has(item.experimentId));
-  for (const todo of draft.todos) {
-    if ((todo.experimentId && ids.has(todo.experimentId)) || (todo.sourceBlockId && blockIds.has(todo.sourceBlockId))) {
-      todo.experimentId = null;
-      todo.sourceBlockId = null;
-    }
-  }
-}
-
-async function notifyReady(): Promise<void> {
-  if (!isTauri()) return;
-  const { isPermissionGranted, requestPermission } = await import("@tauri-apps/plugin-notification");
-  if (!(await isPermissionGranted())) await requestPermission();
 }
 
 export function useApp(): AppApi {

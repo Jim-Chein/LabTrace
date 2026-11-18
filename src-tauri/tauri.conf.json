@@ -31,7 +31,7 @@
     "targets": ["dmg", "msi", "nsis"],
     "createUpdaterArtifacts": true,
     "publisher": "LabTrace contributors",
-    "shortDescription": "实验记录与待办",
+    "shortDescription": "实验记录",
     "longDescription": "LabTrace 是一款用于管理实验记录、孔板和时间安排的桌面应用。",
     "icon": [
       "icons/32x32.png",

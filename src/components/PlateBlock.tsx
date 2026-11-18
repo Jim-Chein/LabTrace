@@ -1,11 +1,9 @@
 import { Fragment, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { upcomingMentions } from "../lib/dates";
-import { formatSuggestionWhen } from "../lib/format";
 import { formatWellRange, parseWell, plateSizeLabel, PLATE_SIZES, rectBetween, resizePlate, wellName } from "../lib/plate";
 import { useApp } from "../state/store";
-import { createId, type Block } from "../types";
+import type { Block } from "../types";
 import { ChevronIcon, MoreIcon, PencilIcon, TrashIcon } from "./icons";
-import { Popover, SuggestionCard, anchorOf } from "./ui";
+import { Popover, anchorOf } from "./ui";
 
 export function PlateBlock({
   block,
@@ -34,8 +32,6 @@ export function PlateBlock({
     setDraftGroup(undefined);
   }, [selected.join("|")]);
 
-  const ignored = new Set(app.snap.ignored.filter((item) => item.blockId === block.id).map((item) => item.fingerprint));
-  const mention = upcomingMentions(plate.lidNotes, app.now, ignored)[0];
   const well = plate.cols >= 12 ? 28 : plate.cols >= 8 ? 34 : 44;
   const band = selectionBand(selected);
 
@@ -202,32 +198,6 @@ export function PlateBlock({
               />
             ) : (
               <pre className="lid-text" onClick={() => setEditingLid(true)}>{plate.lidNotes || "记录细胞、铺板和加药时间"}</pre>
-            )}
-            {mention && (
-              <SuggestionCard
-                when={formatSuggestionWhen(mention.dueAt)}
-                content={mention.content}
-                onAdd={() => {
-                  const ts = Date.now();
-                  app.saveTodo({
-                    id: createId(),
-                    content: mention.content,
-                    dueAt: mention.dueAt,
-                    completed: false,
-                    completedAt: null,
-                    experimentId: block.experimentId,
-                    sourceLabel: plate.title,
-                    sourceBlockId: block.id,
-                    sourceStyle: "link",
-                    tag: "从记录添加",
-                    notified: false,
-                    createdAt: ts,
-                    updatedAt: ts,
-                  });
-                  app.ignoreSuggestion(block.experimentId, block.id, mention.fingerprint);
-                }}
-                onIgnore={() => app.ignoreSuggestion(block.experimentId, block.id, mention.fingerprint)}
-              />
             )}
           </section>
         )}
