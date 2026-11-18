@@ -96,9 +96,13 @@ GitHub Actions（`.github/workflows/release.yml`）会在标签推送后构建�
 
 `https://github.com/Jim-Chein/LabTrace/releases/latest/download/latest.json`
 
+## 补发已有版本的安装包
+
+不要移动或删除已经发出的 tag。Actions 里手动运行 **Release**，`tag` 填已有版本（例如 `v0.1.0`），`platforms` 选 `macos`、`windows` 或 `all`。工作流只把新产物上传到这个 Release，并在 `latest.json` 里合并平台条目，不会清掉已经存在的 Windows 安装包。
+
 ## 代码签名（可选，目前是占位）
 
-工作流已经读取这些 secret。不设置时产物保持未签名，安装方式见上面。
+工作流只有在 secret 非空时才把它传给打包器。空的 `APPLE_CERTIFICATE` 不会再触发 `security import`。没有 Apple 证书时，macOS 安装包使用 ad-hoc 签名（`codesign -s -`），不做公证。Updater 的 minisign 仍然使用 `TAURI_SIGNING_PRIVATE_KEY`。安装方式见上面。
 
 | Secret | 用途 |
 | --- | --- |

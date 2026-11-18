@@ -4,22 +4,44 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to upload into. Does not move or delete the tag.
+        required: true
+        default: v0.1.0
+        type: string
+      platforms:
+        description: Which installers to build and upload
+        required: true
+        type: choice
+        options:
+          - macos
+          - windows
+          - all
+        default: macos
 
 jobs:
   publish:
+    name: publish (${{ matrix.id }})
     permissions:
       contents: write
+    runs-on: ${{ matrix.platform }}
+    # One uploader at a time so latest.json keeps every platform already on the release.
+    concurrency:
+      group: labtrace-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: windows-latest
-            args: ""
-          - platform: macos-latest
-            args: "--target aarch64-apple-darwin"
-          - platform: macos-latest
-            args: "--target x86_64-apple-darwin"
-    runs-on: ${{ matrix.platform }}
+          - id: windows
+            platform: windows-latest
+            os: windows
+          - id: macos
+            platform: macos-latest
+            os: macos
+    if: ${{ github.event_name == 'push' || inputs.platforms == 'all' || inputs.platforms == matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -31,7 +53,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Add macOS Rust targets
-        if: matrix.platform == 'macos-latest'
+        if: matrix.os == 'macos'
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - uses: swatinem/rust-cache@v2
@@ -41,14 +63,26 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # Unsigned by default. Updater artifacts (latest.json and *.sig) are
-      # produced only when TAURI_SIGNING_PRIVATE_KEY is set. OS code signing
-      # stays off until the Apple / Windows secrets below are added.
-      - uses: tauri-apps/tauri-action@v0
+      - name: Resolve release tag
+        id: release
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          if ! printf '%s' "$RELEASE_TAG" | grep -Eq '^v[0-9A-Za-z][0-9A-Za-z._+-]*$'; then
+            echo "Refusing to publish '$RELEASE_TAG'. Expected a tag like v0.1.0." >&2
+            exit 1
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
+      # Empty GitHub secrets arrive as empty strings. Tauri then tries
+      # `security import -f pkcs12` and the macOS bundle fails. This step
+      # exports a variable only when it has a value. Without an Apple
+      # certificate it sets APPLE_SIGNING_IDENTITY=- so the app is ad-hoc
+      # signed and not notarized. TAURI_SIGNING_PRIVATE_KEY is unchanged.
+      - name: Prepare OS signing environment
+        shell: bash
+        env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -57,14 +91,63 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: LabTrace ${{ github.ref_name }}
-          releaseBody: |
-            LabTrace ${{ github.ref_name }}
+        run: bash .github/scripts/export-signing-env.sh
 
-            These builds are unsigned unless the Apple or Windows signing secrets are configured.
-            See the README for how to open an unsigned app on macOS and Windows.
+      - name: Build and upload Windows installers
+        if: matrix.os == 'windows'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ steps.release.outputs.tag }}
+          releaseName: LabTrace ${{ steps.release.outputs.tag }}
+          releaseBody: |
+            LabTrace ${{ steps.release.outputs.tag }}
+
+            Windows installers are Authenticode-signed only when WINDOWS_CERTIFICATE is set.
+            macOS installers are Developer ID signed and notarized only when the Apple secrets are set; otherwise they are ad-hoc signed.
+            See the README for how to open an unsigned or ad-hoc build.
           releaseDraft: false
           prerelease: false
-          args: ${{ matrix.args }}
+
+      - name: Build and upload macOS Apple Silicon
+        if: matrix.os == 'macos'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ steps.release.outputs.tag }}
+          releaseName: LabTrace ${{ steps.release.outputs.tag }}
+          releaseBody: |
+            LabTrace ${{ steps.release.outputs.tag }}
+
+            Windows installers are Authenticode-signed only when WINDOWS_CERTIFICATE is set.
+            macOS installers are Developer ID signed and notarized only when the Apple secrets are set; otherwise they are ad-hoc signed.
+            See the README for how to open an unsigned or ad-hoc build.
+          releaseDraft: false
+          prerelease: false
+          args: --target aarch64-apple-darwin
+
+      - name: Build and upload macOS Intel
+        if: matrix.os == 'macos'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ steps.release.outputs.tag }}
+          releaseName: LabTrace ${{ steps.release.outputs.tag }}
+          releaseBody: |
+            LabTrace ${{ steps.release.outputs.tag }}
+
+            Windows installers are Authenticode-signed only when WINDOWS_CERTIFICATE is set.
+            macOS installers are Developer ID signed and notarized only when the Apple secrets are set; otherwise they are ad-hoc signed.
+            See the README for how to open an unsigned or ad-hoc build.
+          releaseDraft: false
+          prerelease: false
+          args: --target x86_64-apple-darwin
