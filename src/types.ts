@@ -72,7 +72,10 @@ export interface Attachment {
   experimentId: string;
   blockId: string;
   filename: string;
-  storedName: string;
+  /** Bytes copied into app storage by an older version. Absent for a path reference. */
+  storedName?: string;
+  /** Absolute path of the user-selected file. Never invented for an older imported copy. */
+  sourcePath?: string;
   size: number;
   updatedAt: number;
 }

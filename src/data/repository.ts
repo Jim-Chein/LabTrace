@@ -1,4 +1,5 @@
 import { isTauri } from "../lib/env";
+import { normalizeAttachment } from "../lib/localPath";
 import { emptySnapshot, type Attachment, type Block, type Experiment, type Folder, type PlateData, type Snapshot, type TextData } from "../types";
 
 export interface Repository {
@@ -60,7 +61,7 @@ export function createMemoryRepository(): Repository {
           folders: parsed.folders ?? [],
           experiments: parsed.experiments ?? [],
           blocks: parsed.blocks ?? [],
-          attachments: parsed.attachments ?? [],
+          attachments: (parsed.attachments ?? []).map((item) => normalizeAttachment(item)),
           recents: parsed.recents ?? [],
         }, parsed);
       } catch {
@@ -116,7 +117,8 @@ CREATE TABLE IF NOT EXISTS blocks (
 );
 CREATE TABLE IF NOT EXISTS attachments (
   id TEXT PRIMARY KEY, experiment_id TEXT NOT NULL, block_id TEXT NOT NULL,
-  filename TEXT NOT NULL, stored_name TEXT NOT NULL, size INTEGER NOT NULL, updated_at INTEGER NOT NULL
+  filename TEXT NOT NULL, stored_name TEXT NOT NULL, size INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+  source_path TEXT
 );
 CREATE TABLE IF NOT EXISTS todos (
   id TEXT PRIMARY KEY, content TEXT NOT NULL, due_at INTEGER, completed INTEGER NOT NULL,
@@ -142,6 +144,10 @@ export function createTauriRepository(): Repository {
   const db = () => (dbPromise ??= openSql().then(async (database) => {
     for (const statement of SCHEMA.split(";").map((part) => part.trim()).filter(Boolean)) {
       await database.execute(statement);
+    }
+    const columns = await database.select<{ name: string }[]>("PRAGMA table_info(attachments)");
+    if (!columns.some((column) => column.name === "source_path")) {
+      await database.execute("ALTER TABLE attachments ADD COLUMN source_path TEXT");
     }
     return database;
   }));
@@ -191,8 +197,8 @@ export function createTauriRepository(): Repository {
         }
         for (const attachment of snapshot.attachments) {
           await database.execute(
-            "INSERT INTO attachments (id, experiment_id, block_id, filename, stored_name, size, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-            [attachment.id, attachment.experimentId, attachment.blockId, attachment.filename, attachment.storedName, attachment.size, attachment.updatedAt],
+            "INSERT INTO attachments (id, experiment_id, block_id, filename, stored_name, size, updated_at, source_path) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+            [attachment.id, attachment.experimentId, attachment.blockId, attachment.filename, attachment.storedName ?? "", attachment.size, attachment.updatedAt, attachment.sourcePath ?? null],
           );
         }
         for (const recent of snapshot.recents) {
@@ -233,7 +239,7 @@ function blockPayload(block: Block): unknown {
 interface FolderRow { id: string; parent_id: string | null; name: string; sort_order: number; created_at: number; updated_at: number }
 interface ExperimentRow { id: string; folder_id: string; title: string; subtitle: string; sort_order: number; created_at: number; updated_at: number }
 interface BlockRow { id: string; experiment_id: string; kind: string; sort_order: number; updated_at: number; data: string }
-interface AttachmentRow { id: string; experiment_id: string; block_id: string; filename: string; stored_name: string; size: number; updated_at: number }
+interface AttachmentRow { id: string; experiment_id: string; block_id: string; filename: string; stored_name: string; size: number; updated_at: number; source_path?: string | null }
 interface RecentRow { experiment_id: string; opened_at: number }
 
 function folderFrom(row: FolderRow): Folder {
@@ -253,5 +259,14 @@ function blockFrom(row: BlockRow): Block {
   return { id: row.id, experimentId: row.experiment_id, kind: "files", order: row.sort_order, updatedAt: row.updated_at };
 }
 function attachmentFrom(row: AttachmentRow): Attachment {
-  return { id: row.id, experimentId: row.experiment_id, blockId: row.block_id, filename: row.filename, storedName: row.stored_name, size: row.size, updatedAt: row.updated_at };
+  return normalizeAttachment({
+    id: row.id,
+    experimentId: row.experiment_id,
+    blockId: row.block_id,
+    filename: row.filename,
+    storedName: row.stored_name,
+    sourcePath: row.source_path ?? undefined,
+    size: row.size,
+    updatedAt: row.updated_at,
+  });
 }

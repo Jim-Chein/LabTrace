@@ -20,15 +20,17 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { height: 100%; margin: 0; }
+html, body, #root { height: 100%; margin: 0; overflow: hidden; }
 button, input, select, textarea { font-family: inherit; color: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: default; }
 
 .app {
   height: 100%;
+  min-height: 0;
   display: grid;
   grid-template-columns: 76px 248px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   background: var(--bg);
   overflow: hidden;
 }
@@ -42,6 +44,9 @@ button:disabled { cursor: default; }
   padding: 16px 0 12px;
   gap: 6px;
   border-right: 1px solid #f1f0f6;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 .logo { width: 34px; height: 34px; margin-bottom: 10px; }
 .rail-btn {
@@ -83,7 +88,7 @@ button:disabled { cursor: default; }
   place-items: center;
 }
 
-.sidebar { background: var(--sidebar); padding: 18px 12px; display: flex; flex-direction: column; min-width: 0; }
+.sidebar { background: var(--sidebar); padding: 18px 12px; display: flex; flex-direction: column; min-width: 0; min-height: 0; height: 100%; overflow: hidden; }
 .side-title { font-size: 20px; font-weight: 750; letter-spacing: -0.03em; padding: 2px 8px 12px; }
 .search, .pill-search {
   display: flex;
@@ -113,7 +118,7 @@ button:disabled { cursor: default; }
   justify-content: center;
   gap: 6px;
 }
-.tree { overflow: auto; padding-bottom: 12px; }
+.tree { flex: 1 1 auto; min-height: 0; overflow: auto; padding-bottom: 12px; }
 .tree-row {
   width: 100%;
   border: 0;
@@ -133,8 +138,8 @@ button:disabled { cursor: default; }
 .chev { display: grid; place-items: center; color: #9a98a6; }
 .chev.right { margin-left: auto; }
 
-.main { min-width: 0; display: flex; flex-direction: column; }
-.topbar { display: flex; align-items: center; gap: 12px; padding: 14px 22px 0; }
+.main { min-width: 0; min-height: 0; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+.topbar { flex: none; display: flex; align-items: center; gap: 12px; padding: 14px 22px 0; }
 .tabs { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; overflow: auto; }
 .tab {
   border: 0;
@@ -163,7 +168,14 @@ button:disabled { cursor: default; }
   width: 36px; height: 36px; border-radius: 50%;
   background: #6c64f8; color: #fff; font-weight: 700; font-size: 13px; flex: none;
 }
-.content { flex: 1; overflow: auto; padding: 8px 28px 28px; }
+.content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 8px 28px 28px;
+  outline: none;
+}
 
 .page { max-width: 1180px; }
 .crumbs { color: #a4a3b0; font-size: 13px; margin: 12px 0 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
@@ -221,7 +233,23 @@ button:disabled { cursor: default; }
 .card h3 { margin: 0; font-size: 16px; font-weight: 750; }
 .thead, .trow { display: grid; align-items: center; gap: 8px; padding: 8px 12px; }
 .folder-cols { grid-template-columns: minmax(0, 1.5fr) 150px 90px 36px; }
-.file-cols { grid-template-columns: minmax(0, 1.5fr) 110px 140px 84px 32px; }
+.file-cols { grid-template-columns: minmax(0, 1.6fr) 88px 128px minmax(132px, auto); }
+.file-hint { margin: 4px 0 0; color: var(--muted); font-size: 12px; max-width: 640px; }
+.name-block { min-width: 0; }
+.file-path { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9c9bab; font-size: 12px; margin-top: 2px; }
+.file-path.missing { color: var(--danger); }
+.ref-tag { display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 999px; background: #f4f3fb; color: #6f6e7c; font-size: 12px; font-weight: 650; vertical-align: 1px; }
+.file-actions { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; align-items: center; }
+.file-actions button { border: 0; background: transparent; color: var(--link); font-size: 12px; font-weight: 650; padding: 2px 4px; }
+.card.hot { outline: 2px solid var(--brand); }
+.menu-note { margin: 4px 8px 6px; color: var(--muted); font-size: 12px; max-width: 220px; }
+.toast {
+  position: fixed; z-index: 60; left: 50%; bottom: 18px; transform: translateX(-50%);
+  max-width: min(560px, calc(100% - 32px));
+  background: #17171d; color: #fff; border-radius: 12px; padding: 10px 12px 10px 14px;
+  display: flex; gap: 12px; align-items: center; box-shadow: var(--shadow);
+}
+.toast button { border: 0; background: transparent; color: #fff; font-weight: 650; }
 .thead { color: #a7a6b2; font-size: 13px; }
 .trow { border-radius: 12px; min-height: 58px; }
 .trow:hover, .trow.on { background: #f6f5fe; }
