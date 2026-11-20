@@ -1,9 +1,10 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { seedDemo } from "../data/seed";
 import { createRepository, type Repository } from "../data/repository";
 import { isTauri } from "../lib/env";
+import { detachReference as detachReferencePlan, dropImportedCopy, fileReference, relinkAttachment, storedCopiesToDelete } from "../lib/localPath";
 import { descendantFolderIds, rootFolder } from "../lib/tree";
-import { createId, emptySnapshot, type Attachment, type Block, type Snapshot, type Tab, type Todo } from "../types";
+import { createId, emptySnapshot, type Attachment, type Block, type Snapshot, type Tab } from "../types";
 
 interface Focus {
   experimentId: string;
@@ -34,7 +35,6 @@ interface AppApi {
   newTab: () => void;
   openFolder: (id: string) => void;
   openExperiment: (id: string, opts?: { blockId?: string }) => void;
-  openTodo: () => void;
   openRecent: () => void;
   showFiles: () => void;
   createFolder: (parentId: string | null, name?: string) => void;
@@ -50,15 +50,12 @@ interface AppApi {
   updateBlock: (id: string, recipe: (block: Block) => void) => void;
   deleteBlock: (id: string) => void;
   moveBlock: (id: string, direction: -1 | 1) => void;
-  saveTodo: (todo: Todo) => void;
-  toggleTodo: (id: string) => void;
-  deleteTodo: (id: string) => void;
-  ignoreSuggestion: (experimentId: string, blockId: string, fingerprint: string) => void;
-  addAttachment: (attachment: Attachment, bytes: Uint8Array) => Promise<void>;
-  deleteAttachment: (id: string) => Promise<void>;
-  readAttachment: (id: string) => Promise<Uint8Array>;
-  exportAttachment: (id: string) => Promise<void>;
-  setDemoClock: (enabled: boolean) => void;
+  linkFile: (experimentId: string, blockId: string, sourcePath: string) => Promise<void>;
+  relinkFile: (id: string, sourcePath: string) => Promise<void>;
+  detachReference: (id: string) => void;
+  deleteImportedCopy: (id: string) => Promise<void>;
+  reloadNotebook: () => Promise<void>;
+  notify: (message: string) => void;
   checkUpdates: () => Promise<void>;
   clearToast: () => void;
   clearFocus: () => void;
@@ -74,24 +71,11 @@ function boot(snap: Snapshot): { tabs: Tab[]; active: string; expanded: Record<s
   if (nofq) tabs.push({ id: "tab-nofq", kind: "folder", targetId: nofq.id });
   else if (root) tabs.push({ id: "tab-root", kind: "folder", targetId: root.id });
   if (first) tabs.push({ id: "tab-e1", kind: "experiment", targetId: first.id });
-  if (!tabs.length) tabs.push({ id: "tab-empty", kind: "todo" });
+  if (!tabs.length) tabs.push({ id: "tab-empty", kind: "recent" });
   const expanded: Record<string, boolean> = {};
   if (root) expanded[root.id] = true;
   if (nofq) expanded[nofq.id] = true;
   return { tabs, active: tabs[0].id, expanded };
-}
-
-async function notify(body: string): Promise<void> {
-  if (isTauri()) {
-    const { isPermissionGranted, requestPermission, sendNotification } = await import("@tauri-apps/plugin-notification");
-    let granted = await isPermissionGranted();
-    if (!granted) granted = (await requestPermission()) === "granted";
-    if (granted) sendNotification({ title: "LabTrace 待办", body });
-    return;
-  }
-  if (typeof Notification === "undefined") return;
-  if (Notification.permission === "default") await Notification.requestPermission();
-  if (Notification.permission === "granted") new Notification("LabTrace 待办", { body });
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -159,26 +143,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("beforeunload", flush);
   }, []);
 
-  useEffect(() => {
-    const tick = window.setInterval(() => {
-      const current = snapRef.current;
-      const real = Date.now();
-      const due = current.todos.filter(
-        (todo) => !todo.completed && !todo.notified && todo.dueAt != null && todo.dueAt <= real && real - todo.dueAt < 90_000,
-      );
-      if (!due.length) return;
-      for (const todo of due) void notify(todo.content);
-      commit((draft) => {
-        for (const todo of draft.todos) {
-          if (due.some((item) => item.id === todo.id)) todo.notified = true;
-        }
-      });
-    }, 20_000);
-    return () => window.clearInterval(tick);
-  }, []);
-
-  const now = useMemo(() => (snap.demoNowMs != null ? new Date(snap.demoNowMs) : new Date()), [snap.demoNowMs]);
-  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0] ?? { id: "tab-empty", kind: "todo" as const };
+  const now = new Date();
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0] ?? { id: "tab-empty", kind: "recent" as const };
+  const notify = (message: string) => {
+    setToast(message);
+    window.setTimeout(() => {
+      setToast((current) => (current === message ? null : current));
+    }, 4200);
+  };
 
   const focusTab = (next: Tab[], id: string) => {
     setTabs(next);
@@ -228,7 +200,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     openFolder: (id) => openUnique("folder", id, true),
     openExperiment: (id, opts) => {
       commit((draft) => {
-        const opened = draft.demoNowMs ?? Date.now();
+        const opened = Date.now();
         const recent = draft.recents.find((item) => item.experimentId === id);
         if (recent) recent.openedAt = opened;
         else draft.recents.push({ experimentId: id, openedAt: opened });
@@ -236,7 +208,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       openUnique("experiment", id);
       setFocus(opts?.blockId ? { experimentId: id, blockId: opts.blockId } : { experimentId: id });
     },
-    openTodo: () => openUnique("todo"),
     openRecent: () => openUnique("recent"),
     showFiles: () => {
       const fileTab = [...tabs].reverse().find((tab) => tab.kind === "folder" || tab.kind === "experiment");
@@ -304,7 +275,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     deleteFolder: (id) => {
       const ids = new Set([id, ...descendantFolderIds(snap.folders, id)]);
       const experimentIds = new Set(snap.experiments.filter((experiment) => ids.has(experiment.folderId)).map((experiment) => experiment.id));
-      const names = snap.attachments.filter((item) => experimentIds.has(item.experimentId)).map((item) => item.storedName);
+      const names = storedCopiesToDelete(snap.attachments.filter((item) => experimentIds.has(item.experimentId)));
       commit((draft) => {
         removeExperiments(draft, experimentIds);
         draft.folders = draft.folders.filter((folder) => !ids.has(folder.id));
@@ -318,7 +289,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
     },
     deleteExperiment: (id) => {
-      const names = snap.attachments.filter((item) => item.experimentId === id).map((item) => item.storedName);
+      const names = storedCopiesToDelete(snap.attachments.filter((item) => item.experimentId === id));
       commit((draft) => removeExperiments(draft, new Set([id])), true);
       for (const name of names) void repoRef.current?.removeBytes(name);
       setTabs((prev) => {
@@ -374,15 +345,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const experiment = draft.experiments.find((item) => item.id === block.experimentId);
       if (experiment) experiment.updatedAt = block.updatedAt;
     }),
-    deleteBlock: (id) => commit((draft) => {
-      const block = draft.blocks.find((item) => item.id === id);
-      draft.blocks = draft.blocks.filter((item) => item.id !== id);
-      if (block?.kind === "files") {
-        const removed = draft.attachments.filter((item) => item.blockId === id);
+    deleteBlock: (id) => {
+      const names = storedCopiesToDelete(snapRef.current.attachments.filter((item) => item.blockId === id));
+      commit((draft) => {
+        draft.blocks = draft.blocks.filter((item) => item.id !== id);
         draft.attachments = draft.attachments.filter((item) => item.blockId !== id);
-        for (const attachment of removed) void repoRef.current?.removeBytes(attachment.storedName);
-      }
-    }, true),
+      }, true);
+      for (const name of names) void repoRef.current?.removeBytes(name);
+    },
     moveBlock: (id, direction) => commit((draft) => {
       const block = draft.blocks.find((item) => item.id === id);
       if (!block) return;
@@ -394,71 +364,114 @@ export function AppProvider({ children }: { children: ReactNode }) {
       block.order = swap.order;
       swap.order = order;
     }),
-    saveTodo: (todo) => {
-      commit((draft) => {
-        const index = draft.todos.findIndex((item) => item.id === todo.id);
-        if (index >= 0) draft.todos[index] = todo;
-        else draft.todos.push(todo);
-      });
-      if (!todo.completed && todo.dueAt) void notifyReady();
-    },
-    toggleTodo: (id) => commit((draft) => {
-      const todo = draft.todos.find((item) => item.id === id);
-      if (!todo) return;
-      todo.completed = !todo.completed;
-      todo.completedAt = todo.completed ? Date.now() : null;
-      todo.updatedAt = Date.now();
-    }),
-    deleteTodo: (id) => commit((draft) => {
-      draft.todos = draft.todos.filter((todo) => todo.id !== id);
-    }, true),
-    ignoreSuggestion: (experimentId, blockId, fingerprint) => commit((draft) => {
-      if (!draft.ignored.some((item) => item.experimentId === experimentId && item.blockId === blockId && item.fingerprint === fingerprint)) {
-        draft.ignored.push({ experimentId, blockId, fingerprint });
-      }
-    }, true),
-    addAttachment: async (attachment, bytes) => {
-      await repoRef.current?.writeBytes(attachment.storedName, bytes);
-      commit((draft) => {
-        draft.attachments.push(attachment);
-        const experiment = draft.experiments.find((item) => item.id === attachment.experimentId);
-        if (experiment) experiment.updatedAt = attachment.updatedAt;
-      }, true);
-    },
-    deleteAttachment: async (id) => {
-      const attachment = snapRef.current.attachments.find((item) => item.id === id);
-      if (attachment) await repoRef.current?.removeBytes(attachment.storedName);
-      commit((draft) => {
-        draft.attachments = draft.attachments.filter((item) => item.id !== id);
-      }, true);
-    },
-    readAttachment: async (id) => {
-      const attachment = snapRef.current.attachments.find((item) => item.id === id);
-      if (!attachment) return new Uint8Array();
-      return (await repoRef.current?.readBytes(attachment.storedName)) ?? new Uint8Array();
-    },
-    exportAttachment: async (id) => {
-      const attachment = snapRef.current.attachments.find((item) => item.id === id);
-      if (!attachment || !repoRef.current) return;
-      if (isTauri()) {
-        const { save } = await import("@tauri-apps/plugin-dialog");
-        const { invoke } = await import("@tauri-apps/api/core");
-        const dest = await save({ title: "保存文件", defaultPath: attachment.filename });
-        if (!dest) return;
-        await invoke("export_attachment", { storedName: attachment.storedName, dest });
+    linkFile: async (experimentId, blockId, sourcePath) => {
+      let attachment: Attachment;
+      try {
+        attachment = fileReference({ id: createId(), experimentId, blockId, sourcePath, size: 0, updatedAt: Date.now() });
+      } catch {
+        notify("只能关联本机文件的绝对路径");
         return;
       }
-      const bytes = await repoRef.current.readBytes(attachment.storedName);
-      const url = URL.createObjectURL(new Blob([bytes as unknown as BlobPart]));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = attachment.filename;
-      link.click();
-      URL.revokeObjectURL(url);
+      if (snapRef.current.attachments.some((item) => item.blockId === blockId && item.sourcePath === attachment.sourcePath)) {
+        notify("这个文件已经关联过");
+        return;
+      }
+      if (isTauri()) {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          const sourcePath = attachment.sourcePath;
+          if (!sourcePath) return;
+          const info = await invoke<{ exists: boolean; isFile: boolean; size: number; modifiedMs: number }>("local_file_status", { path: sourcePath });
+          if (!info.exists) {
+            notify("找不到这个文件，可能已移动或未挂载");
+            return;
+          }
+          if (!info.isFile) {
+            notify("请选择文件");
+            return;
+          }
+          attachment.size = info.size;
+          if (info.modifiedMs) attachment.updatedAt = info.modifiedMs;
+        } catch {
+          notify("无法读取该路径");
+          return;
+        }
+      }
+      commit((draft) => {
+        draft.attachments.push(attachment);
+        const experiment = draft.experiments.find((item) => item.id === experimentId);
+        if (experiment) experiment.updatedAt = Date.now();
+      }, true);
     },
-    setDemoClock: (enabled) => commit((draft) => {
-      draft.demoNowMs = enabled ? new Date(2026, 8, 8, 11, 30, 0).getTime() : null;
-    }, true),
+    relinkFile: async (id, sourcePath) => {
+      const current = snapRef.current.attachments.find((item) => item.id === id);
+      if (!current) return;
+      let next: Attachment;
+      try {
+        next = relinkAttachment(current, sourcePath, { size: current.size, updatedAt: Date.now() });
+      } catch {
+        notify("只能关联本机文件的绝对路径");
+        return;
+      }
+      if (isTauri()) {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          const sourcePath = next.sourcePath;
+          if (!sourcePath) return;
+          const info = await invoke<{ exists: boolean; isFile: boolean; size: number; modifiedMs: number }>("local_file_status", { path: sourcePath });
+          if (!info.exists) {
+            notify("找不到这个文件，可能已移动或未挂载");
+            return;
+          }
+          if (!info.isFile) {
+            notify("请选择文件");
+            return;
+          }
+          next.size = info.size;
+          if (info.modifiedMs) next.updatedAt = info.modifiedMs;
+        } catch {
+          notify("无法读取该路径");
+          return;
+        }
+      }
+      commit((draft) => {
+        const file = draft.attachments.find((item) => item.id === id);
+        if (!file) return;
+        file.sourcePath = next.sourcePath;
+        file.filename = next.filename;
+        file.size = next.size;
+        file.updatedAt = next.updatedAt;
+      }, true);
+    },
+    detachReference: (id) => {
+      commit((draft) => {
+        const index = draft.attachments.findIndex((item) => item.id === id);
+        if (index < 0) return;
+        const next = detachReferencePlan(draft.attachments[index]);
+        if (!next) draft.attachments.splice(index, 1);
+        else draft.attachments[index] = next;
+      }, true);
+    },
+    deleteImportedCopy: async (id) => {
+      const attachment = snapRef.current.attachments.find((item) => item.id === id);
+      if (!attachment) return;
+      const plan = dropImportedCopy(attachment);
+      if (!plan.storedName) return;
+      await repoRef.current?.removeBytes(plan.storedName);
+      commit((draft) => {
+        const index = draft.attachments.findIndex((item) => item.id === id);
+        if (index < 0) return;
+        if (!plan.next) draft.attachments.splice(index, 1);
+        else draft.attachments[index] = plan.next;
+      }, true);
+    },
+    reloadNotebook: async () => {
+      const loaded = await repoRef.current?.load();
+      if (!loaded) return;
+      snapRef.current = loaded;
+      setSnap(loaded);
+    },
+    notify,
     checkUpdates: async () => {
       if (!isTauri()) {
         setToast("浏览器预览不会连接更新服务器。安装桌面版后可在此检查 GitHub Releases。");
@@ -494,24 +507,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 }
 
 function removeExperiments(draft: Snapshot, ids: Set<string>) {
-  const blockIds = new Set(draft.blocks.filter((block) => ids.has(block.experimentId)).map((block) => block.id));
   draft.experiments = draft.experiments.filter((experiment) => !ids.has(experiment.id));
   draft.blocks = draft.blocks.filter((block) => !ids.has(block.experimentId));
   draft.attachments = draft.attachments.filter((item) => !ids.has(item.experimentId));
   draft.recents = draft.recents.filter((item) => !ids.has(item.experimentId));
-  draft.ignored = draft.ignored.filter((item) => !ids.has(item.experimentId));
-  for (const todo of draft.todos) {
-    if ((todo.experimentId && ids.has(todo.experimentId)) || (todo.sourceBlockId && blockIds.has(todo.sourceBlockId))) {
-      todo.experimentId = null;
-      todo.sourceBlockId = null;
-    }
-  }
-}
-
-async function notifyReady(): Promise<void> {
-  if (!isTauri()) return;
-  const { isPermissionGranted, requestPermission } = await import("@tauri-apps/plugin-notification");
-  if (!(await isPermissionGranted())) await requestPermission();
 }
 
 export function useApp(): AppApi {

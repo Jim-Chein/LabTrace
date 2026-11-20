@@ -10,7 +10,6 @@
     "sql:allow-select",
     "sql:allow-load",
     "dialog:default",
-    "notification:default",
     "updater:default",
     "process:default"
   ]

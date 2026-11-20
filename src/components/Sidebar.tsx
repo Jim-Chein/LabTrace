@@ -1,4 +1,5 @@
 import { useMemo, useState, type MouseEvent } from "react";
+import { searchKindLabel, searchNotebook } from "../lib/search";
 import { descendantFolderIds } from "../lib/tree";
 import type { Folder } from "../types";
 import { useApp } from "../state/store";
@@ -37,6 +38,7 @@ export function Sidebar() {
         <PlusIcon size={15} /> 新建
       </button>
       <div className="tree">
+        {q && <SearchHits query={app.sidebarQuery} />}
         {app.snap.folders
           .filter((folder) => folder.parentId === null)
           .sort((a, b) => a.order - b.order)
@@ -106,7 +108,7 @@ export function Sidebar() {
       )}
       {remove && (
         <Modal title="删除" onClose={() => setRemove(null)}>
-          <p className="confirm-copy">确定删除「{remove.name}」？此操作无法撤销。</p>
+          <p className="confirm-copy">确定删除「{remove.name}」？已关联的原文件不会被删除。如果其中有已导入的副本，那些副本会从应用数据中删除。此操作无法撤销。</p>
           <div className="modal-actions">
             <button className="btn-soft" onClick={() => setRemove(null)}>取消</button>
             <button className="btn-danger" onClick={() => {
@@ -128,6 +130,36 @@ export function Sidebar() {
       )}
     </aside>
   );
+}
+
+function SearchHits({ query }: { query: string }) {
+  const app = useApp();
+  const hits = searchNotebook(app.snap, query);
+  if (!hits.length) return <p className="search-empty">没有匹配的记录</p>;
+  return (
+    <div className="search-hits">
+      {hits.map((hit) => (
+        <button
+          key={hit.id}
+          type="button"
+          className="search-hit"
+          data-search-hit={hit.kind}
+          onClick={() => {
+            if (hit.experimentId) app.openExperiment(hit.experimentId, { blockId: hit.blockId });
+            else if (hit.folderId) app.openFolder(hit.folderId);
+          }}
+        >
+          <b>{hit.title}</b>
+          <span>{searchKindLabel(hit.kind)} · <Snippet text={hit.snippet} start={hit.matchStart} end={hit.matchEnd} /></span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function Snippet({ text, start, end }: { text: string; start: number; end: number }) {
+  if (end <= start || end > text.length) return <>{text}</>;
+  return <>{text.slice(0, start)}<mark>{text.slice(start, end)}</mark>{text.slice(end)}</>;
 }
 
 function TreeFolder({
