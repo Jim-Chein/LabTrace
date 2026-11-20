@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 import { formatBytes, formatFolderTime } from "../lib/format";
+import { searchNotebook } from "../lib/search";
+import { Snippet } from "./Sidebar";
 import { folderPath } from "../lib/tree";
 import { useApp } from "../state/store";
 import type { Experiment, Folder } from "../types";
@@ -24,11 +26,12 @@ export function FolderView({ folderId }: { folderId: string }) {
   const rows = useMemo(() => {
     if (!folder) return [];
     const q = query.trim().toLowerCase();
+    const hits = q ? searchNotebook(app.snap, query) : [];
     const folders = app.snap.folders.filter((item) => item.parentId === folder.id && (!q || item.name.toLowerCase().includes(q)));
     const files = app.snap.experiments.filter((item) => {
       if (item.folderId !== folder.id) return false;
       if (!q) return true;
-      return item.title.toLowerCase().includes(q) || item.subtitle.toLowerCase().includes(q);
+      return item.title.toLowerCase().includes(q) || item.subtitle.toLowerCase().includes(q) || hits.some((hit) => hit.experimentId === item.id);
     });
     const decorated = [
       ...folders.map((item) => ({ kind: "folder" as const, folder: item, ts: item.updatedAt, name: item.name, size: 0 })),
@@ -85,7 +88,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                 <span className="file-badge">{row.kind === "folder" ? <FolderIcon size={16} /> : <DocIcon size={16} />}</span>
                 <div>
                   <div className="name">{row.name}</div>
-                  {row.kind === "experiment" && <div className="name-sub">{rowSubtitle(row.experiment, app.snap.blocks)}</div>}
+                  {row.kind === "experiment" && <FolderMatch experiment={row.experiment} query={query} fallback={rowSubtitle(row.experiment, app.snap.blocks)} />}
                 </div>
               </div>
               <span className="muted">{formatFolderTime(row.ts, app.now)}</span>
@@ -142,7 +145,7 @@ export function FolderView({ folderId }: { folderId: string }) {
       )}
       {remove && (
         <Modal title="删除" onClose={() => setRemove(null)}>
-          <p className="confirm-copy">确定删除「{remove.name}」？此操作无法撤销。</p>
+          <p className="confirm-copy">确定删除「{remove.name}」？已关联的原文件不会被删除。如果其中有已导入的副本，那些副本会从应用数据中删除。此操作无法撤销。</p>
           <div className="modal-actions">
             <button className="btn-soft" onClick={() => setRemove(null)}>取消</button>
             <button className="btn-danger" onClick={() => {
@@ -170,6 +173,17 @@ export function FolderView({ folderId }: { folderId: string }) {
       )}
     </div>
   );
+}
+
+function FolderMatch({ experiment, query, fallback }: { experiment: Experiment; query: string; fallback: string }) {
+  const app = useApp();
+  const q = query.trim();
+  if (!q || experiment.title.toLowerCase().includes(q.toLowerCase()) || experiment.subtitle.toLowerCase().includes(q.toLowerCase())) {
+    return <div className="name-sub">{fallback}</div>;
+  }
+  const hit = searchNotebook(app.snap, q).find((item) => item.experimentId === experiment.id);
+  if (!hit) return <div className="name-sub">{fallback}</div>;
+  return <div className="name-sub"><Snippet text={hit.snippet} start={hit.matchStart} end={hit.matchEnd} /></div>;
 }
 
 function rowSubtitle(experiment: Experiment, blocks: { experimentId: string }[]): string {

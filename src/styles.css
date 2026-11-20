@@ -119,6 +119,13 @@ button:disabled { cursor: default; }
   gap: 6px;
 }
 .tree { flex: 1 1 auto; min-height: 0; overflow: auto; padding-bottom: 12px; }
+.search-hits { display: flex; flex-direction: column; gap: 2px; margin: 0 4px 8px; }
+.search-hit { width: 100%; border: 0; background: transparent; text-align: left; border-radius: 8px; padding: 6px 8px; }
+.search-hit:hover { background: #fff; }
+.search-hit b { display: block; font-size: 13px; font-weight: 650; }
+.search-hit span { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.search-hit mark { background: #efeaff; color: inherit; border-radius: 3px; }
+.search-empty { color: var(--muted); font-size: 12px; margin: 4px 10px 8px; }
 .tree-row {
   width: 100%;
   border: 0;

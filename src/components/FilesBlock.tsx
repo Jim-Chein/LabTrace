@@ -5,7 +5,7 @@ import { inspectLocalPath, revealLabel } from "../lib/localPath";
 import { useApp } from "../state/store";
 import type { Attachment, Block } from "../types";
 import { FileTypeIcon, MoreIcon, TrashIcon, UploadIcon } from "./icons";
-import { Popover, anchorOf } from "./ui";
+import { Modal, Popover, anchorOf } from "./ui";
 
 interface Probe {
   state: "ok" | "missing" | "error";
@@ -19,6 +19,7 @@ export function FilesBlock({ block }: { block: Extract<Block, { kind: "files" }>
   const hotRef = useRef(false);
   const [hot, setHot] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+  const [confirmCopy, setConfirmCopy] = useState<string | null>(null);
   const [probe, setProbe] = useState<Record<string, Probe>>({});
   const experiment = app.snap.experiments.find((item) => item.id === block.experimentId);
   const files = app.snap.attachments.filter((item) => item.blockId === block.id).sort((a, b) => a.updatedAt - b.updatedAt);
@@ -232,15 +233,30 @@ export function FilesBlock({ block }: { block: Extract<Block, { kind: "files" }>
         );
       })}
       <Popover open={!!menu} x={menu?.x ?? 0} y={menu?.y ?? 0} onClose={() => setMenu(null)}>
-        <button className="menu-item danger" onClick={() => { if (menu) void app.deleteAttachment(menu.id); setMenu(null); }}>
-          <TrashIcon /> 移除引用
-        </button>
+        {menuFile?.sourcePath && (
+          <button className="menu-item" onClick={() => { if (menu) app.detachReference(menu.id); setMenu(null); }}>
+            移除引用
+          </button>
+        )}
+        {menuFile?.storedName && (
+          <button className="menu-item danger" onClick={() => { if (menu) setConfirmCopy(menu.id); setMenu(null); }}>
+            <TrashIcon /> 删除已导入副本
+          </button>
+        )}
         <p className="menu-note">
-          {menuFile?.storedName
-            ? "会删除应用内的已导入副本，不会删除你电脑上的原文件。"
-            : "只从记录中移除路径，不会删除原文件。"}
+          {menuFile?.sourcePath && "移除引用只去掉记录里的原文件路径，不会删除原文件，也不会删除已导入副本。"}
+          {menuFile?.storedName && "删除已导入副本会删掉应用里保存的那一份，并且需要再次确认。不会删除你电脑上的原文件。"}
         </p>
       </Popover>
+      {confirmCopy && (
+        <Modal title="删除已导入副本" onClose={() => setConfirmCopy(null)}>
+          <p className="confirm-copy">将删除应用内保存的这份副本。不会删除你电脑上的原文件。此操作无法撤销。</p>
+          <div className="modal-actions">
+            <button className="btn-soft" onClick={() => setConfirmCopy(null)}>取消</button>
+            <button className="btn-danger" onClick={() => { void app.deleteImportedCopy(confirmCopy); setConfirmCopy(null); }}>删除副本</button>
+          </div>
+        </Modal>
+      )}
     </section>
   );
 }

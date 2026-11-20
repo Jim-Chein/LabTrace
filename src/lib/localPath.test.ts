@@ -3,6 +3,8 @@ import { createMemoryRepository } from "../data/repository";
 import { buildDemoSnapshot } from "../data/seed";
 import { emptySnapshot, type Attachment } from "../types";
 import {
+  detachReference,
+  dropImportedCopy,
   fileNameOf,
   fileReference,
   inspectLocalPath,
@@ -98,6 +100,30 @@ describe("file references", () => {
       size: 1,
       updatedAt: 2,
     })])).toEqual(["stored-copy.xlsx"]);
+    expect(detachReference(next)?.storedName).toBe("stored-copy.xlsx");
+    expect(detachReference(next)?.sourcePath).toBeUndefined();
+  });
+
+  it("detaches a path without deleting an imported copy or the original", () => {
+    const linked = fileReference({
+      id: "n",
+      experimentId: "e",
+      blockId: "b",
+      sourcePath: "/Users/甲/只是引用.xlsx",
+      size: 1,
+      updatedAt: 2,
+    });
+    expect(detachReference(linked)).toBeNull();
+    expect(dropImportedCopy(linked).storedName).toBeUndefined();
+    const both: Attachment = { ...linked, storedName: "kept.xlsx", filename: "kept.xlsx" };
+    const detached = detachReference(both);
+    expect(detached?.storedName).toBe("kept.xlsx");
+    expect(detached?.sourcePath).toBeUndefined();
+    const removed = dropImportedCopy(both);
+    expect(removed.storedName).toBe("kept.xlsx");
+    expect(removed.next?.sourcePath).toBe("/Users/甲/只是引用.xlsx");
+    expect(removed.next?.storedName).toBeUndefined();
+    expect(removed.storedName).not.toBe(both.sourcePath);
   });
 
   it("refuses to build a reference from a browser file name", () => {

@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { seedDemo } from "../data/seed";
 import { createRepository, type Repository } from "../data/repository";
 import { isTauri } from "../lib/env";
-import { fileReference, relinkAttachment, storedCopiesToDelete } from "../lib/localPath";
+import { detachReference as detachReferencePlan, dropImportedCopy, fileReference, relinkAttachment, storedCopiesToDelete } from "../lib/localPath";
 import { descendantFolderIds, rootFolder } from "../lib/tree";
 import { createId, emptySnapshot, type Attachment, type Block, type Snapshot, type Tab } from "../types";
 
@@ -52,7 +52,9 @@ interface AppApi {
   moveBlock: (id: string, direction: -1 | 1) => void;
   linkFile: (experimentId: string, blockId: string, sourcePath: string) => Promise<void>;
   relinkFile: (id: string, sourcePath: string) => Promise<void>;
-  deleteAttachment: (id: string) => Promise<void>;
+  detachReference: (id: string) => void;
+  deleteImportedCopy: (id: string) => Promise<void>;
+  reloadNotebook: () => Promise<void>;
   notify: (message: string) => void;
   checkUpdates: () => Promise<void>;
   clearToast: () => void;
@@ -441,14 +443,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
         file.updatedAt = next.updatedAt;
       }, true);
     },
-    deleteAttachment: async (id) => {
-      const attachment = snapRef.current.attachments.find((item) => item.id === id);
-      for (const name of storedCopiesToDelete(attachment ? [attachment] : [])) {
-        await repoRef.current?.removeBytes(name);
-      }
+    detachReference: (id) => {
       commit((draft) => {
-        draft.attachments = draft.attachments.filter((item) => item.id !== id);
+        const index = draft.attachments.findIndex((item) => item.id === id);
+        if (index < 0) return;
+        const next = detachReferencePlan(draft.attachments[index]);
+        if (!next) draft.attachments.splice(index, 1);
+        else draft.attachments[index] = next;
       }, true);
+    },
+    deleteImportedCopy: async (id) => {
+      const attachment = snapRef.current.attachments.find((item) => item.id === id);
+      if (!attachment) return;
+      const plan = dropImportedCopy(attachment);
+      if (!plan.storedName) return;
+      await repoRef.current?.removeBytes(plan.storedName);
+      commit((draft) => {
+        const index = draft.attachments.findIndex((item) => item.id === id);
+        if (index < 0) return;
+        if (!plan.next) draft.attachments.splice(index, 1);
+        else draft.attachments[index] = plan.next;
+      }, true);
+    },
+    reloadNotebook: async () => {
+      const loaded = await repoRef.current?.load();
+      if (!loaded) return;
+      snapRef.current = loaded;
+      setSnap(loaded);
     },
     notify,
     checkUpdates: async () => {

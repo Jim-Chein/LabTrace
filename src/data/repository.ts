@@ -154,6 +154,8 @@ export function createTauriRepository(): Repository {
 
   return {
     async load() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("reconcile_notebook_restore");
       const database = await db();
       const folders = await database.select<FolderRow[]>("SELECT * FROM folders");
       const experiments = await database.select<ExperimentRow[]>("SELECT * FROM experiments");

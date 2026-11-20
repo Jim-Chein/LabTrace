@@ -1,6 +1,14 @@
+mod backup;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::Manager;
+
+fn notebook_paths(app: &tauri::AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+    let root = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    Ok((root.join("labtrace.db"), root.join("attachments"), root.join("restore-recovery")))
+}
 
 fn attachments_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app
@@ -234,6 +242,32 @@ fn open_local_file(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn export_notebook(app: tauri::AppHandle, dest: String) -> Result<backup::BackupInfo, String> {
+    inspect_local_path(&dest)?;
+    let (db, attachments, _) = notebook_paths(&app)?;
+    backup::export_notebook(&db, &attachments, Path::new(&dest))
+}
+
+#[tauri::command]
+fn inspect_notebook_backup(archive: String) -> Result<backup::BackupInfo, String> {
+    inspect_local_path(&archive)?;
+    backup::inspect_notebook(Path::new(&archive))
+}
+
+#[tauri::command]
+fn restore_notebook(app: tauri::AppHandle, archive: String) -> Result<backup::BackupInfo, String> {
+    inspect_local_path(&archive)?;
+    let (db, attachments, recovery) = notebook_paths(&app)?;
+    backup::restore_notebook(Path::new(&archive), &db, &attachments, &recovery, backup::RestoreFault::None)
+}
+
+#[tauri::command]
+fn reconcile_notebook_restore(app: tauri::AppHandle) -> Result<(), String> {
+    let (db, attachments, recovery) = notebook_paths(&app)?;
+    backup::reconcile_restore(&db, &attachments, &recovery)
+}
+
+#[tauri::command]
 fn reveal_local_file(path: String) -> Result<(), String> {
     inspect_local_path(&path)?;
     if !Path::new(&path).exists() {
@@ -256,7 +290,11 @@ pub fn run() {
             remove_attachment_file,
             local_file_status,
             open_local_file,
-            reveal_local_file
+            reveal_local_file,
+            export_notebook,
+            inspect_notebook_backup,
+            restore_notebook,
+            reconcile_notebook_restore
         ])
         .run(tauri::generate_context!())
         .expect("error while running LabTrace");

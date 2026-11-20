@@ -5,11 +5,13 @@ import { ClockIcon, CloseIcon, DocIcon, FolderIcon, Logo, PlusIcon } from "./com
 import { RecentsPage } from "./components/RecentsPage";
 import { Sidebar } from "./components/Sidebar";
 import { Popover, anchorOf } from "./components/ui";
+import { NotebookBackup } from "./components/NotebookBackup";
 import { useApp } from "./state/store";
 
 export function App() {
   const app = useApp();
   const [avatar, setAvatar] = useState<{ x: number; y: number } | null>(null);
+  const [backup, setBackup] = useState<"export" | "restore" | null>(null);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -83,10 +85,13 @@ export function App() {
       <Popover open={!!avatar} x={avatar?.x ?? 0} y={avatar?.y ?? 0} onClose={() => setAvatar(null)} className="menu avatar-pop" width={240}>
         <div className="pop-title">LabTrace</div>
         <p className="pop-sub">版本 0.1.0</p>
+        <button className="menu-item" onClick={() => { setBackup("export"); setAvatar(null); }}>备份笔记本</button>
+        <button className="menu-item" onClick={() => { setBackup("restore"); setAvatar(null); }}>恢复笔记本</button>
         <button className="menu-item" onClick={() => void app.checkUpdates()}>检查更新</button>
         {app.updateOffer && <button className="menu-item" onClick={() => void app.updateOffer?.install()}>安装 {app.updateOffer.version}</button>}
         {app.toast && <p className="pop-sub">{app.toast}</p>}
       </Popover>
+      <NotebookBackup mode={backup} onClose={() => setBackup(null)} />
       {app.toast && (
         <div className="toast" role="status">
           <span>{app.toast}</span>

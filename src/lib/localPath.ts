@@ -104,6 +104,30 @@ export function fileReference(input: {
   };
 }
 
+/**
+ * Remove only the external path from a row.
+ * An imported copy stays. A path-only row is removed. Nothing on disk is named for deletion.
+ */
+export function detachReference(file: Attachment): Attachment | null {
+  if (!file.storedName) return null;
+  const next: Attachment = { ...file };
+  delete next.sourcePath;
+  return next;
+}
+
+/**
+ * Forget an imported copy after the user confirms that deletion.
+ * The stored name is the only file the caller may delete. A remaining original path stays on the row.
+ */
+export function dropImportedCopy(file: Attachment): { storedName?: string; next: Attachment | null } {
+  if (!file.storedName) return { next: file };
+  const storedName = file.storedName;
+  if (!file.sourcePath) return { storedName, next: null };
+  const next: Attachment = { ...file };
+  delete next.storedName;
+  return { storedName, next };
+}
+
 /** Point a row at an original file. The imported copy, if any, stays in place. */
 export function relinkAttachment(file: Attachment, sourcePath: string, observed: { size: number; updatedAt: number }): Attachment {
   const checked = inspectLocalPath(sourcePath);
@@ -117,7 +141,10 @@ export function relinkAttachment(file: Attachment, sourcePath: string, observed:
   };
 }
 
-/** Names of bytes this app copied. Never the user's original path. */
+/**
+ * Imported-copy names to delete only after the user confirms deleting the record that owns them.
+ * Never an original path, and not used when a reference is detached or relinked.
+ */
 export function storedCopiesToDelete(files: Pick<Attachment, "storedName" | "sourcePath">[]): string[] {
   return files.flatMap((file) => (file.storedName ? [file.storedName] : []));
 }
